@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DTF Gang Sheet Editor</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+    #toolbar {
+      background: #333;
+      color: white;
+      padding: 10px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 14px;
+    }
+    #toolbar input,
+    #toolbar select,
+    #toolbar button {
+      padding: 6px;
+      font-size: 14px;
+    }
+    #wrapper {
+      position: relative;
+      width: 100%;
+      height: calc(100vh - 50px);
+      overflow: auto;
+      background: #f8f8f8;
+    }
+    #canvas {
+      background: white;
+      display: block;
+      margin: 40px 0 0 40px;
+      touch-action: none;
+      border: 1px solid #ccc;
+    }
+    .ruler {
+      position: absolute;
+      background: #eee;
+      font-size: 10px;
+      color: #333;
+      z-index: 10;
+    }
+    #rulerX {
+      top: 0;
+      left: 40px;
+      right: 0;
+      height: 40px;
+      display: flex;
+      align-items: flex-end;
+      border-bottom: 1px solid #999;
+    }
+    #rulerY {
+      top: 40px;
+      left: 0;
+      bottom: 0;
+      width: 40px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      border-right: 1px solid #999;
+    }
+    #grid {
+      position: absolute;
+      top: 40px;
+      left: 40px;
+      pointer-events: none;
+      z-index: 5;
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <input type="file" id="upload" multiple accept="image/*">
+    <button onclick="addText()">Add Text</button>
+    <button onclick="clearCanvas()">Clear All</button>
+    <button onclick="exportPNG()">Export PNG</button>
+    <button onclick="exportPDF()">Export PDF</button>
+    <label>Zoom: <input type="range" id="zoom" min="0.1" max="2" step="0.01" value="1"></label>
+  </div>
+
+  <div id="wrapper">
+    <div id="rulerX" class="ruler"></div>
+    <div id="rulerY" class="ruler"></div>
+    <canvas id="canvas" width="6600" height="11700"></canvas>
+    <canvas id="grid"></canvas>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const rulerX = document.getElementById('rulerX');
+    const rulerY = document.getElementById('rulerY');
+    const zoomInput = document.getElementById('zoom');
+    const gridCanvas = document.getElementById('grid');
+    const gridCtx = gridCanvas.getContext('2d');
+
+    let zoom = 1;
+    let objects = [];
+    let selected = null;
+    const DPI = 300;
+    const inchToPx = DPI;
+    const snapSize = DPI / 4; // 0.25 inch grid
+
+    function drawRulers() {
+      rulerX.innerHTML = '';
+      const numTicks = Math.floor(canvas.width / DPI);
+      for (let i = 0; i <= numTicks; i++) {
+        const label = document.createElement('div');
+        label.style.width = DPI * zoom + 'px';
+        label.style.textAlign = 'center';
+        label.textContent = i;
+        rulerX.appendChild(label);
+      }
+      rulerY.innerHTML = '';
+      const numTicksY = Math.floor(canvas.height / DPI);
+      for (let i = 0; i <= numTicksY; i++) {
+        const label = document.createElement('div');
+        label.style.height = DPI * zoom + 'px';
+        label.style.textAlign = 'right';
+        label.style.paddingRight = '2px';
+        label.textContent = i;
+        rulerY.appendChild(label);
+      }
+    }
+
+    function drawGrid() {
+      gridCanvas.width = canvas.width * zoom;
+      gridCanvas.height = canvas.height * zoom;
+      gridCtx.clearRect(0, 0, gridCanvas.width, gridCanvas.height);
+      gridCtx.strokeStyle = '#ddd';
+      for (let x = 0; x < gridCanvas.width; x += snapSize * zoom) {
+        gridCtx.beginPath();
+        gridCtx.moveTo(x, 0);
+        gridCtx.lineTo(x, gridCanvas.height);
+        gridCtx.stroke();
+      }
+      for (let y = 0; y < gridCanvas.height; y += snapSize * zoom) {
+        gridCtx.beginPath();
+        gridCtx.moveTo(0, y);
+        gridCtx.lineTo(gridCanvas.width, y);
+        gridCtx.stroke();
+      }
+    }
+
+    function drawCanvas() {
+      ctx.setTransform(zoom, 0, 0, zoom, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const obj of objects) {
+        if (obj.type === 'image') {
+          ctx.save();
+          ctx.translate(obj.x + obj.w/2, obj.y + obj.h/2);
+          ctx.rotate(obj.rotation);
+          ctx.drawImage(obj.img, -obj.w/2, -obj.h/2, obj.w, obj.h);
+          ctx.restore();
+        } else if (obj.type === 'text') {
+          ctx.font = `${obj.size}px sans-serif`;
+          ctx.fillText(obj.text, obj.x, obj.y);
+        }
+      }
+    }
+
+    document.getElementById('upload').addEventListener('change', e => {
+      const files = [...e.target.files];
+      for (const file of files) {
+        const img = new Image();
+        img.onload = () => {
+          const obj = {
+            type: 'image',
+            img,
+            x: 100,
+            y: 100,
+            w: img.width,
+            h: img.height,
+            rotation: 0,
+          };
+          objects.push(obj);
+          drawCanvas();
+        };
+        img.src = URL.createObjectURL(file);
+      }
+    });
+
+    function clearCanvas() {
+      objects = [];
+      drawCanvas();
+    }
+
+    function addText() {
+      const text = prompt('Enter text:', 'Sample Text');
+      if (!text) return;
+      objects.push({ type: 'text', text, x: 150, y: 150, size: 30 });
+      drawCanvas();
+    }
+
+    function exportPNG() {
+      const link = document.createElement('a');
+      link.download = 'canvas.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    }
+
+    function exportPDF() {
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: 'px', format: [canvas.width, canvas.height] });
+      const imgData = canvas.toDataURL('image/png');
+      pdf.addImage(imgData, 'PNG', 0, 0);
+      pdf.save('canvas.pdf');
+    }
+
+    zoomInput.addEventListener('input', () => {
+      zoom = parseFloat(zoomInput.value);
+      drawRulers();
+      drawGrid();
+      drawCanvas();
+    });
+
+    drawRulers();
+    drawGrid();
+    drawCanvas();
+  </script>
+</body>
+</html>
